@@ -1,173 +1,157 @@
-let ws = null;
-const WEBSOCKET_URL = "ws://127.0.0.1:8000/ws";
+const socket = new WebSocket('ws://localhost:8000/ws');
+const messagesElement = document.getElementById('messages');
+const form = document.getElementById('form');
+const messageInput = document.getElementById('message_text');
+const uploadBtn = document.getElementById('upload_btn');
+const pdfInput = document.getElementById('pdf_input');
 
-document.addEventListener("DOMContentLoaded", () => {
-    const form      = document.getElementById("form");
-    const textarea  = document.getElementById("message_text");
-    const uploadBtn = document.getElementById("upload_btn");
-    const pdfInput  = document.getElementById("pdf_input");
+// WebSocket 연결 상태 확인
+socket.onopen = function(event) {
+    console.log('WebSocket 연결이 열렸습니다.');
+    addMessage('시스템', '챗봇에 연결되었습니다. 메시지를 입력하거나 PDF 파일을 업로드해주세요.', 'message-server');
+};
 
-    form.addEventListener("submit", (e) => {
-        e.preventDefault();
-        const text = textarea.value.trim();
-        if (!text) return;
+socket.onclose = function(event) {
+    console.log('WebSocket 연결이 닫혔습니다.');
+    addMessage('시스템', '연결이 끊어졌습니다. 페이지를 새로고침해주세요.', 'message-server');
+};
 
-        ensureWS(() => sendText(text));
+socket.onerror = function(error) {
+    console.error('WebSocket 오류:', error);
+    addMessage('시스템', '연결 오류가 발생했습니다.', 'message-server');
+};
 
-        // 사용자 메시지 화면에 추가
-        updateScreen(text, true);
-        textarea.value = "";
-    });
+// 서버로부터 메시지 수신
+socket.onmessage = function(event) {
+    const data = JSON.parse(event.data);
 
-    // Enter 단일키로도 전송
-    textarea.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            form.requestSubmit();
-        }
-    });
+    if (data.type === 'message') {
+        addMessage('봇', data.content, 'message-server');
+    } else if (data.type === 'file_processed') {
+        addMessage('시스템', data.content, 'message-server');
+    } else if (data.type === 'error') {
+        addMessage('오류', data.content, 'message-server');
+    }
+};
 
-    // 업로드 버튼 → 파일 선택
-    uploadBtn.addEventListener("click", () => {
-        pdfInput.value = ""; // 같은 파일 재선택 허용
-        pdfInput.click();
-    });
+// 메시지를 화면에 추가하는 함수
+function addMessage(sender, content, className) {
+    const li = document.createElement('li');
+    li.className = className;
 
-    // 파일 선택 시 전송
-    pdfInput.addEventListener("change", async () => {
-        const file = pdfInput.files && pdfInput.files[0];
-        if (!file) return;
+    if (className === 'message-server') {
+        li.innerHTML = `<i class="fas fa-robot icon"></i>${content}`;
+    } else {
+        li.textContent = content;
+    }
 
-        // 간단한 유효성 검사
-        if (file.type !== "application/pdf") {
-            alert("PDF 파일만 업로드할 수 있습니다.");
-            return;
-        }
-        // (선택) 용량 제한 예시: 10MB
-        const MAX_BYTES = 10 * 1024 * 1024;
-        if (file.size > MAX_BYTES) {
-            alert("파일이 너무 큽니다. 10MB 이하의 PDF만 업로드해 주세요.");
-            return;
-        }
+    messagesElement.appendChild(li);
+    messagesElement.scrollTop = messagesElement.scrollHeight;
+}
 
-        // 화면에 업로드 시작 메시지
-        updateScreen(`'${file.name}' 업로드를 시작합니다...`, true);
+// 폼 제출 이벤트 (메시지 전송)
+form.addEventListener('submit', function(e) {
+    e.preventDefault();
 
-        try {
-            const base64 = await fileToBase64(file);
-            ensureWS(() => sendFile(file.name, base64));
-        } catch (err) {
-            console.error(err);
-            updateServerText(`파일 인코딩 중 오류가 발생했습니다: ${String(err)}`);
-        }
-    });
+    const message = messageInput.value.trim();
+    if (message) {
+        // 사용자 메시지를 화면에 표시
+        addMessage('나', message, 'message-user');
+
+        // 서버로 메시지 전송
+        socket.send(JSON.stringify({
+            type: 'text',
+            content: message
+        }));
+
+        messageInput.value = '';
+        adjustTextareaHeight();
+    }
 });
 
-function ensureWS(cb) {
-    if (!ws) {
-        ws = new WebSocket(WEBSOCKET_URL);
-        ws.addEventListener("open",  () => cb && cb());
-        ws.addEventListener("message", onMessage);
-        ws.addEventListener("close", onClose);
-        ws.addEventListener("error", (err) => console.error("WebSocket error:", err));
+// PDF 업로드 버튼 클릭
+uploadBtn.addEventListener('click', function() {
+    pdfInput.click();
+});
+
+// PDF 파일 선택 시
+pdfInput.addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (file && file.type === 'application/pdf') {
+        uploadPDF(file);
     } else {
-        cb && cb();
+        addMessage('오류', 'PDF 파일만 업로드 가능합니다.', 'message-server');
     }
+    // 파일 입력 초기화
+    pdfInput.value = '';
+});
+
+// PDF 파일 업로드 함수
+function uploadPDF(file) {
+    addMessage('나', `📎 ${file.name} 업로드 중...`, 'message-user');
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const base64Data = btoa(new Uint8Array(e.target.result).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+
+        // 서버로 파일 전송
+        socket.send(JSON.stringify({
+            type: 'file',
+            filename: file.name,
+            content: base64Data
+        }));
+    };
+
+    reader.onerror = function() {
+        addMessage('오류', '파일 읽기에 실패했습니다.', 'message-server');
+    };
+
+    reader.readAsArrayBuffer(file);
 }
 
-function fileToBase64(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        // readAsDataURL → "data:application/pdf;base64,..." 형식
-        reader.readAsDataURL(file);
-        reader.onload = () => {
-            try {
-                const result = String(reader.result);
-                const base64 = result.split(",")[1]; // 헤더 제거
-                resolve(base64);
-            } catch (e) {
-                reject(e);
-            }
-        };
-        reader.onerror = (e) => reject(e);
-    });
+// 텍스트 영역 높이 자동 조절
+function adjustTextareaHeight() {
+    messageInput.style.height = 'auto';
+    messageInput.style.height = Math.min(messageInput.scrollHeight, 100) + 'px';
 }
 
-function sendText(text) {
-    ws.send(JSON.stringify({ type: "text", payload: text }));
-}
+// 텍스트 입력 시 높이 조절
+messageInput.addEventListener('input', adjustTextareaHeight);
 
-function sendFile(filename, base64Data) {
-    ws.send(JSON.stringify({
-        type: "file",
-        filename: filename,
-        payload: base64Data
-    }));
-    // 서버 메시지 자리표시자 추가
-    addServerPlaceholder();
-    // 사용자 업로드 안내 추가(선택)
-    updateServerText(`'${filename}' 전송 중...`);
-}
-
-function onMessage(event) {
-    const msg = event.data;
-    if (msg === "<EOS>") {
-        ws.close();
-        return;
+// 엔터키로 전송, Shift+엔터로 줄바꿈
+messageInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        form.dispatchEvent(new Event('submit'));
     }
-    updateScreen(msg, false);
-}
+});
 
-function onClose() {
-    ws = null;
-}
+// 드래그 앤 드롭 기능
+document.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    document.body.style.backgroundColor = '#f0f8ff';
+});
 
-function updateScreen(text, isUser) {
-    const list = document.getElementById("messages");
-    if (isUser) {
-        const li = document.createElement("li");
-        li.classList.add("message", "message-user");
-        li.textContent = text;
-        list.appendChild(li);
+document.addEventListener('dragleave', function(e) {
+    if (e.clientX === 0 && e.clientY === 0) {
+        document.body.style.backgroundColor = '#ffffff';
+    }
+});
 
-        // 서버 답변 placeholder
-        addServerPlaceholder();
-    } else {
-        const last = list.lastElementChild;
-        if (last && last.classList.contains("d-none")) {
-            last.classList.remove("d-none");
-            last.innerHTML += text;
+document.addEventListener('drop', function(e) {
+    e.preventDefault();
+    document.body.style.backgroundColor = '#ffffff';
+
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+        const file = files[0];
+        if (file.type === 'application/pdf') {
+            uploadPDF(file);
         } else {
-            // 혹시 placeholder가 없으면 새로 추가
-            const li = document.createElement("li");
-            li.classList.add("message", "message-server");
-            li.innerHTML = '<i class="fas fa-robot icon"></i>' + text;
-            list.appendChild(li);
+            addMessage('오류', 'PDF 파일만 업로드 가능합니다.', 'message-server');
         }
     }
-    list.scrollTop = list.scrollHeight;
-}
+});
 
-function addServerPlaceholder() {
-    const list = document.getElementById("messages");
-    const placeholder = document.createElement("li");
-    placeholder.classList.add("message", "message-server", "d-none");
-    placeholder.innerHTML = '<i class="fas fa-robot icon"></i>';
-    list.appendChild(placeholder);
-}
-
-function updateServerText(text) {
-    const list = document.getElementById("messages");
-    const last = list.lastElementChild;
-    if (last && last.classList.contains("d-none")) {
-        last.classList.remove("d-none");
-        last.innerHTML += text;
-    } else {
-        const li = document.createElement("li");
-        li.classList.add("message", "message-server");
-        li.innerHTML = '<i class="fas fa-robot icon"></i>' + text;
-        list.appendChild(li);
-    }
-    list.scrollTop = list.scrollHeight;
-}
-
+// 초기 텍스트 영역 높이 설정
+adjustTextareaHeight();

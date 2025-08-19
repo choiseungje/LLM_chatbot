@@ -34,6 +34,12 @@ socket.onmessage = function(event) {
     }
 };
 
+function showArchive() {
+    document.getElementById('chat-page').style.display = 'none';
+    document.getElementById('archive-page').style.display = 'block';
+    loadArchives();
+}
+
 // 메시지를 화면에 추가하는 함수
 function addMessage(sender, content, className) {
     const li = document.createElement('li');
